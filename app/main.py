@@ -122,6 +122,9 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
+    # Load models & dataset tensors
+    X, Y, convlstm_model, st_gnn_model = load_models_and_data()
+
     # Main Page Control Expander
     with st.expander("🎛️ Quick Control Panel (Scenario, Weather Sliders & Model Selection)", expanded=True):
         cp1, cp2, cp3 = st.columns([1, 1, 1])
