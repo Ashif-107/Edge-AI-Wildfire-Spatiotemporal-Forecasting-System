@@ -1,0 +1,16 @@
+torch
+torchvision
+numpy
+scipy
+pandas
+scikit-learn
+onnx
+onnxruntime
+onnxscript
+streamlit
+plotly
+folium
+streamlit-folium
+earthengine-api
+matplotlib
+tqdm

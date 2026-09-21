@@ -1,0 +1,20 @@
+{
+  "model_name": "convlstm",
+  "FP32_Base": {
+    "disk_size_mb": 0.31,
+    "avg_latency_ms": 151.05,
+    "peak_ram_mb": 0.01,
+    "iou": 0.6809
+  },
+  "INT8_Quantized": {
+    "disk_size_mb": 0.12,
+    "avg_latency_ms": 198.05,
+    "peak_ram_mb": 0.01,
+    "iou": 0.681
+  },
+  "Comparison": {
+    "Latency_Speedup": "0.76x",
+    "Disk_Size_Reduction": "61.3%",
+    "IoU_Accuracy_Retention": "100.0%"
+  }
+}

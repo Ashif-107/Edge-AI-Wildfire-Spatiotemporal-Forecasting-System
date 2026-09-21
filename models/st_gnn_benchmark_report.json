@@ -1,0 +1,20 @@
+{
+  "model_name": "st_gnn",
+  "FP32_Base": {
+    "disk_size_mb": 0.12,
+    "avg_latency_ms": 4.56,
+    "peak_ram_mb": 0.01,
+    "iou": 0.2329
+  },
+  "INT8_Quantized": {
+    "disk_size_mb": 0.14,
+    "avg_latency_ms": 3.93,
+    "peak_ram_mb": 0.01,
+    "iou": 0.2329
+  },
+  "Comparison": {
+    "Latency_Speedup": "1.16x",
+    "Disk_Size_Reduction": "-16.7%",
+    "IoU_Accuracy_Retention": "100.0%"
+  }
+}

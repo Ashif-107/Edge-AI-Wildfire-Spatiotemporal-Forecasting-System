@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual environment
+venv/
+ENV/
+env/
+
+# Data and Checkpoints
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+checkpoints/*.pt
+checkpoints/*.pth
+models/*.onnx
+*.onnx
+
+# IDE / OS settings
+.vscode/
+.idea/
+.DS_Store
+*.log
+
+# Streamlit config / cache
+.streamlit/
