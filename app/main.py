@@ -122,44 +122,56 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    X, Y, convlstm_model, st_gnn_model = load_models_and_data()
+    # Main Page Control Expander
+    with st.expander("🎛️ Quick Control Panel (Scenario, Weather Sliders & Model Selection)", expanded=True):
+        cp1, cp2, cp3 = st.columns([1, 1, 1])
 
-    # Sidebar Controls
-    st.sidebar.header("⚙️ Simulation & Model Controls")
+        with cp1:
+            st.markdown("#### 📍 Select Scenario Grid")
+            scenario_options = {
+                "Scenario #1: High Wind Ridge Fire Propagation (Sample 0)": 0,
+                "Scenario #2: Dry Valley Forest Fire Ignition (Sample 2)": 2,
+                "Scenario #3: Steep Slope Upward Spread (Sample 4)": 4,
+                "Scenario #4: Multi-Point Lightning Ignition (Sample 6)": 6,
+                "Scenario #5: Severe Drought High-Temperature Zone (Sample 8)": 8
+            }
+            selected_scenario_name = st.selectbox(
+                "Choose Region / Date Sequence Grid:",
+                options=list(scenario_options.keys()),
+                index=0,
+                key="main_scenario_select"
+            )
+            sample_idx = scenario_options[selected_scenario_name]
 
-    # 1. Model Architecture Selector
-    selected_arch = st.sidebar.radio(
-        "Select Deep Learning Model Architecture:",
-        options=["ConvLSTM2D (Primary Stacked)", "ST-GNN (Spatiotemporal Graph NN)"],
-        index=0
-    )
+            selected_arch = st.radio(
+                "Deep Learning Model:",
+                options=["ConvLSTM2D (Primary Stacked)", "ST-GNN (Spatiotemporal Graph NN)"],
+                index=0,
+                key="main_arch_radio"
+            )
 
-    # 2. Forecast Horizon Selector
-    selected_horizon_str = st.sidebar.select_slider(
-        "Forecast Horizon Window:",
-        options=["24 Hours (+1 Day)", "48 Hours (+2 Days)", "72 Hours (+3 Days)"],
-        value="48 Hours (+2 Days)"
-    )
-    horizon_idx = 0 if "24" in selected_horizon_str else (1 if "48" in selected_horizon_str else 2)
+        with cp2:
+            st.markdown("#### 🌪️ Perturb Weather Variables")
+            temp_slider = st.slider("Temperature (°C / Factor)", min_value=0.0, max_value=1.0, value=0.75, step=0.05, key="main_temp_slider")
+            humidity_slider = st.slider("Relative Humidity (%)", min_value=0.0, max_value=1.0, value=0.20, step=0.05, key="main_hum_slider")
+            wind_speed_slider = st.slider("Wind Vector Speed (m/s)", min_value=0.0, max_value=1.0, value=0.80, step=0.05, key="main_wind_slider")
 
-    # 3. Precision Engine Mode
-    engine_mode = st.sidebar.selectbox(
-        "Inference Precision Engine:",
-        options=["Quantized INT8 ONNX (Edge Drone Mode)", "Base FP32 PyTorch Model"],
-        index=0
-    )
+        with cp3:
+            st.markdown("#### ⏱️ Forecast Horizon & Engine")
+            selected_horizon_str = st.select_slider(
+                "Forecast Lead Time Window:",
+                options=["24 Hours (+1 Day)", "48 Hours (+2 Days)", "72 Hours (+3 Days)"],
+                value="48 Hours (+2 Days)",
+                key="main_horizon_slider"
+            )
+            horizon_idx = 0 if "24" in selected_horizon_str else (1 if "48" in selected_horizon_str else 2)
 
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🌪️ Environmental Parameter Sliders")
-    st.sidebar.caption("Perturb real-time precursor variables to observe hazard zone expansion/contraction:")
-
-    # Interactive Environmental Sliders
-    temp_slider = st.sidebar.slider("Temperature (°C / Factor)", min_value=0.0, max_value=1.0, value=0.75, step=0.05)
-    humidity_slider = st.sidebar.slider("Relative Humidity (%)", min_value=0.0, max_value=1.0, value=0.20, step=0.05)
-    wind_speed_slider = st.sidebar.slider("Wind Vector Magnitude (m/s)", min_value=0.0, max_value=1.0, value=0.80, step=0.05)
-
-    # Sample Selection Slider
-    sample_idx = st.sidebar.number_input("Select Historical Sequence Test Sample:", min_value=0, max_value=len(X)-1, value=0)
+            engine_mode = st.selectbox(
+                "Inference Engine:",
+                options=["Quantized INT8 ONNX (Edge Drone Mode)", "Base FP32 PyTorch Model"],
+                index=0,
+                key="main_engine_select"
+            )
 
     # Prepare input datacube & apply live environmental perturbations
     input_sample = X[sample_idx:sample_idx+1].clone()  # [1, 5, 7, 128, 128]
@@ -190,20 +202,22 @@ def main():
     sample_iou = compute_iou(current_pred[None, ...], current_gt[None, ...], threshold=0.35)
 
     # Main Tabs Layout
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab_input, tab2, tab3 = st.tabs([
         "🗺️ Live Geo-Hazard Map & Perturbation",
+        "🔍 Input Precursor Layers (Weather, Slope, NDVI)",
         "⚡ Edge-AI Efficiency & INT8 Gauges",
         "📊 Evaluation Metrics & Confusion Matrix"
     ])
 
     with tab1:
         st.subheader(f"Side-by-Side Hazard Comparison: {selected_horizon_str}")
-        st.markdown(f"**Model:** `{selected_arch}` | **Engine:** `{engine_mode}` | **Sample Inference Time:** `{inference_latency_ms:.2f} ms` | **IoU:** `{sample_iou:.4f}`")
+        st.info(f"📍 **Current Active Grid:** `{selected_scenario_name}` | **Model:** `{selected_arch}` | **Engine:** `{engine_mode}`")
 
         col1, col2 = st.columns(2)
 
         with col1:
             st.markdown("### 🛰️ Actual Ground Truth Fire Spread")
+            st.caption("Derived from NASA FIRMS active fire satellite thermal hotspot observations recorded at the actual future time step.")
             fig_gt = px.imshow(
                 current_gt,
                 color_continuous_scale="Reds",
@@ -216,6 +230,7 @@ def main():
 
         with col2:
             st.markdown("### 🔮 Predicted Wildfire Hazard Probability Grid")
+            st.caption("Live 128x128 probability grid computed in real-time by feeding the 5-day precursor data cube into the deep learning model.")
             fig_pred = px.imshow(
                 current_pred,
                 color_continuous_scale="YlOrRd",
@@ -229,10 +244,42 @@ def main():
         # Download hazard map button
         st.download_button(
             label="📥 Export Current Hazard Map Overlay (JSON Data)",
-            data=json.dumps({"pred_risk_grid": current_pred.tolist(), "horizon": selected_horizon_str}),
+            data=json.dumps({"pred_risk_grid": current_pred.tolist(), "horizon": selected_horizon_str, "scenario": selected_scenario_name}),
             file_name=f"wildfire_risk_forecast_{horizon_idx+1}d.json",
             mime="application/json"
         )
+
+    with tab_input:
+        st.subheader("🔍 Input Data Cube Precursor Channels (128x128 Grid)")
+        st.markdown("These are the 7 multi-modal environmental variables fed into the model for the selected scenario:")
+        
+        c1, c2, c3, c4 = st.columns(4)
+        # Input sample tensor shape: [1, T=5, C=7, H=128, W=128]
+        inp_np = input_sample[0, -1].numpy()  # Take final day of 5-day sequence
+        
+        with c1:
+            st.markdown("#### 1. Active Fire Mask (t=0)")
+            fig_f = px.imshow(inp_np[0], color_continuous_scale="Reds", aspect="equal")
+            fig_f.update_layout(height=200, margin=dict(l=0,r=0,t=20,b=0))
+            st.plotly_chart(fig_f, use_container_width=True)
+
+        with c2:
+            st.markdown("#### 2. Surface Temp (°C)")
+            fig_t = px.imshow(inp_np[4], color_continuous_scale="Plasma", aspect="equal")
+            fig_t.update_layout(height=200, margin=dict(l=0,r=0,t=20,b=0))
+            st.plotly_chart(fig_t, use_container_width=True)
+
+        with c3:
+            st.markdown("#### 3. MODIS NDVI (Fuel)")
+            fig_n = px.imshow(inp_np[5], color_continuous_scale="YlGn", aspect="equal")
+            fig_n.update_layout(height=200, margin=dict(l=0,r=0,t=20,b=0))
+            st.plotly_chart(fig_n, use_container_width=True)
+
+        with c4:
+            st.markdown("#### 4. Topography Slope")
+            fig_s = px.imshow(inp_np[6], color_continuous_scale="Greys", aspect="equal")
+            fig_s.update_layout(height=200, margin=dict(l=0,r=0,t=20,b=0))
+            st.plotly_chart(fig_s, use_container_width=True)
 
     with tab2:
         st.subheader("⚡ Edge Hardware Optimization Gauges (FP32 vs INT8)")
