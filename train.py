@@ -1,4 +1,4 @@
-"""
+﻿"""
 Training Pipeline for ConvLSTM2D and ST-GNN Wildfire Risk Forecasting Models.
 
 Executes end-to-end model training, validation, metric evaluation, and checkpoint saving.
@@ -43,7 +43,7 @@ def train_model(model, train_loader, val_loader, epochs: int = 10, lr: float = 1
     for epoch in range(1, epochs + 1):
         start_time = time.time()
 
-        # ── Training phase ──
+        # â”€â”€ Training phase â”€â”€
         model.train()
         train_loss = 0.0
         for bx, by in train_loader:
@@ -58,7 +58,7 @@ def train_model(model, train_loader, val_loader, epochs: int = 10, lr: float = 1
         train_loss /= len(train_loader.dataset)
         scheduler.step()
 
-        # ── Validation phase ──
+        # â”€â”€ Validation phase â”€â”€
         model.eval()
         val_loss = 0.0
         val_preds, val_targets = [], []
@@ -76,7 +76,7 @@ def train_model(model, train_loader, val_loader, epochs: int = 10, lr: float = 1
         val_preds   = np.concatenate(val_preds, axis=0)
         val_targets = np.concatenate(val_targets, axis=0)
 
-        # ── Metrics ──
+        # â”€â”€ Metrics â”€â”€
         val_iou    = compute_iou(val_preds, val_targets, threshold=0.35)
         val_pr_auc = compute_pr_auc(val_preds, val_targets)
         acc_dict   = compute_pixel_accuracy(val_preds, val_targets, threshold=0.35)
@@ -120,7 +120,7 @@ def main():
     print(f"Using compute device: {device}")
 
     print("Generating spatiotemporal dataset split...")
-    dataloaders = get_wildfire_dataloaders(batch_size=4, seq_len=5, total_days=90, seed=42)
+    dataloaders = get_wildfire_dataloaders(batch_size=4, seq_len=5, total_days=35, seed=42)
 
     train_loader = dataloaders['train']
     val_loader   = dataloaders['val']
@@ -176,3 +176,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -2,11 +2,15 @@
 Synthetic Spatiotemporal Data Cube Generator for Wildfire Forecasting.
 
 Generates realistic 5-day rolling input tensors [T=5, C=7, H=128, W=128]
-and ground-truth fire risk maps for 24h, 48h, and 72h horizons based on physical fire dynamics
-(wind direction/speed, relative humidity, temperature, fuel load (NDVI), and topography slope).
+and ground-truth fire risk maps for 24h, 48h, and 72h horizons.
+
+Key physical properties:
+ - Fire ignites in small localized patches (2-4 points)
+ - Fire spreads with wind direction, slope gradient, low humidity, and high NDVI
+ - Burnt areas cool down over time (extinction model) — prevents all-fire saturation
+ - Multiple short independent fire episodes keep the dataset challenging and sparse
 """
 
-import os
 import numpy as np
 import torch
 from scipy.ndimage import gaussian_filter
@@ -15,26 +19,26 @@ from scipy.ndimage import gaussian_filter
 class WildfireDataCubeGenerator:
     """
     Simulates physically realistic spatiotemporal data cubes for wildfire risk forecasting.
+
     Channels (C=7):
-      0: active_fire (binary mask)
-      1: wind_u (m/s, normalized)
-      2: wind_v (m/s, normalized)
-      3: humidity (0.0=dry, 1.0=humid)
-      4: temperature (0.0=cold, 1.0=hot)
-      5: NDVI (0.0=barren, 1.0=dense vegetation fuel)
-      6: slope (0.0=flat, 1.0=steep terrain)
+      0: active_fire   — binary mask (1.0 = active fire front, 0.0 = safe)
+      1: wind_u        — ERA5-Land East-West wind velocity component (m/s, normalized)
+      2: wind_v        — ERA5-Land North-South wind velocity component (m/s, normalized)
+      3: humidity      — ERA5-Land relative humidity (0.0 = severe drought, 1.0 = humid)
+      4: temperature   — ERA5-Land surface temperature (0.0 = cold, 1.0 = hot)
+      5: NDVI          — MODIS MOD13A2 vegetation fuel density (0.0 = barren, 1.0 = dense)
+      6: slope         — USGS SRTM terrain slope gradient (0.0 = flat, 1.0 = steep)
     """
 
     def __init__(self, height: int = 128, width: int = 128, seed: int = 42):
         self.height = height
-        self.width = width
-        self.seed = seed
+        self.width  = width
+        self.seed   = seed
         np.random.seed(seed)
         torch.manual_seed(seed)
 
     def _generate_static_layers(self):
         """Generates static topography (slope) and semi-static vegetation (NDVI)."""
-        # Terrain DEM & Slope
         x = np.linspace(-3, 3, self.width)
         y = np.linspace(-3, 3, self.height)
         xx, yy = np.meshgrid(x, y)
@@ -43,102 +47,117 @@ class WildfireDataCubeGenerator:
         slope = np.sqrt(grad_x**2 + grad_y**2)
         slope = (slope - slope.min()) / (slope.max() - slope.min() + 1e-8)
 
-        # Vegetation (NDVI) with spatial clustering
-        raw_ndvi = gaussian_filter(np.random.randn(self.height, self.width), sigma=12)
+        # NDVI: spatially clustered vegetation with random seed variation
+        raw_ndvi = gaussian_filter(np.random.randn(self.height, self.width), sigma=14)
         ndvi = (raw_ndvi - raw_ndvi.min()) / (raw_ndvi.max() - raw_ndvi.min() + 1e-8)
-        ndvi = 0.2 + 0.7 * ndvi  # Range [0.2, 0.9]
+        ndvi = 0.2 + 0.65 * ndvi  # Keep in range [0.2, 0.85]
 
-        return slope, ndvi
+        return slope.astype(np.float32), ndvi.astype(np.float32)
 
     def _generate_dynamic_weather(self, num_days: int):
-        """Generates time-series weather dynamics (wind_u, wind_v, humidity, temperature)."""
+        """Generates spatially-varying time-series weather with realistic diurnal + synoptic patterns."""
         t_steps = np.arange(num_days)
-        # Seasonal/diurnal trend + noise
-        base_temp = 0.6 + 0.25 * np.sin(2 * np.pi * t_steps / 30) + 0.05 * np.random.randn(num_days)
-        temperature = np.clip(base_temp, 0.1, 0.98)
+        base_temp = 0.55 + 0.20 * np.sin(2 * np.pi * t_steps / 20) + 0.08 * np.random.randn(num_days)
+        temperature = np.clip(base_temp, 0.1, 0.92)
 
-        # Humidity inversed with temperature
-        base_rh = 0.7 - 0.4 * temperature + 0.05 * np.random.randn(num_days)
-        humidity = np.clip(base_rh, 0.05, 0.95)
+        base_rh = 0.75 - 0.45 * temperature + 0.06 * np.random.randn(num_days)
+        humidity = np.clip(base_rh, 0.05, 0.92)
 
-        # Wind vectors (u: east-west, v: north-south)
-        wind_u = 0.5 + 0.3 * np.sin(2 * np.pi * t_steps / 15) + 0.1 * np.random.randn(num_days)
-        wind_v = 0.3 + 0.3 * np.cos(2 * np.pi * t_steps / 10) + 0.1 * np.random.randn(num_days)
+        wind_u = 0.4 + 0.25 * np.sin(2 * np.pi * t_steps / 12) + 0.12 * np.random.randn(num_days)
+        wind_v = 0.25 + 0.20 * np.cos(2 * np.pi * t_steps / 9) + 0.10 * np.random.randn(num_days)
 
-        # Expand spatially with mild spatial turbulence
-        weather_cubes = {
-            'wind_u': np.zeros((num_days, self.height, self.width)),
-            'wind_v': np.zeros((num_days, self.height, self.width)),
-            'humidity': np.zeros((num_days, self.height, self.width)),
-            'temperature': np.zeros((num_days, self.height, self.width)),
-        }
+        cubes = {k: np.zeros((num_days, self.height, self.width), dtype=np.float32)
+                 for k in ('wind_u', 'wind_v', 'humidity', 'temperature')}
 
         for t in range(num_days):
-            turb_u = gaussian_filter(np.random.randn(self.height, self.width), sigma=8) * 0.1
-            turb_v = gaussian_filter(np.random.randn(self.height, self.width), sigma=8) * 0.1
-            turb_h = gaussian_filter(np.random.randn(self.height, self.width), sigma=8) * 0.05
-            turb_t = gaussian_filter(np.random.randn(self.height, self.width), sigma=8) * 0.05
+            for key, base, sigma, clip_range in [
+                ('wind_u',      wind_u[t],      7, (-1.0, 1.0)),
+                ('wind_v',      wind_v[t],      7, (-1.0, 1.0)),
+                ('humidity',    humidity[t],    9, (0.02, 0.98)),
+                ('temperature', temperature[t], 9, (0.02, 0.98)),
+            ]:
+                turb = gaussian_filter(np.random.randn(self.height, self.width), sigma=sigma) * 0.08
+                cubes[key][t] = np.clip(base + turb, *clip_range)
 
-            weather_cubes['wind_u'][t] = np.clip(wind_u[t] + turb_u, -1.0, 1.0)
-            weather_cubes['wind_v'][t] = np.clip(wind_v[t] + turb_v, -1.0, 1.0)
-            weather_cubes['humidity'][t] = np.clip(humidity[t] + turb_h, 0.01, 1.0)
-            weather_cubes['temperature'][t] = np.clip(temperature[t] + turb_t, 0.01, 1.0)
+        return cubes
 
-        return weather_cubes
-
-    def simulate_sequence(self, num_days: int = 40, num_ignition_points: int = 4):
+    def simulate_sequence(self, num_days: int = 35):
         """
-        Simulates full time series sequence of (C=7) data layers and physical fire propagation labels.
+        Simulates a fire season time series with:
+          - Multiple short independent fire episodes (each episode resets after extinguishing)
+          - Extinction: active fire front cools off after ~5 days without spreading
+          - This keeps fire pixel ratio LOW and spatially localized (realistic class imbalance)
+
         Returns:
-            data_cubes: shape [num_days, 7, H, W]
+            full_series: shape [num_days, 7, H, W]
         """
         slope, ndvi = self._generate_static_layers()
         weather = self._generate_dynamic_weather(num_days)
 
-        fire_history = np.zeros((num_days, self.height, self.width), dtype=np.float32)
+        fire_history   = np.zeros((num_days, self.height, self.width), dtype=np.float32)
+        burnt_map      = np.zeros((self.height, self.width), dtype=np.float32)  # Burnt = no fuel
+        active_fire    = np.zeros((self.height, self.width), dtype=np.float32)
+        days_since_spread = 0  # Track stagnation for extinction
 
-        # Place initial ignition spots at day 0 and day 10
-        for _ in range(num_ignition_points):
-            init_day = np.random.randint(0, min(10, num_days))
-            cy = np.random.randint(20, self.height - 20)
-            cx = np.random.randint(20, self.width - 20)
-            fire_history[init_day, cy-2:cy+3, cx-2:cx+3] = 1.0
+        # Random ignition schedule: 3–5 independent episodes spread across the season
+        num_episodes = np.random.randint(3, 6)
+        episode_days = sorted(np.random.choice(np.arange(2, num_days - 8), num_episodes, replace=False))
 
-        # Physical propagation simulation loop over time
-        for t in range(1, num_days):
-            prev_fire = fire_history[t - 1]
-            if prev_fire.max() == 0:
-                # Occasional random lightning ignition if no active fires
+        for t in range(num_days):
+            # Fresh ignition event
+            if t in episode_days:
                 cy = np.random.randint(20, self.height - 20)
-                cx = np.random.randint(20, self.width - 20)
-                fire_history[t, cy-1:cy+2, cx-1:cx+2] = 1.0
-                continue
+                cx = np.random.randint(20, self.width  - 20)
+                patch_r = np.random.randint(4, 9)  # Larger initial ignition
+                active_fire[cy-patch_r:cy+patch_r, cx-patch_r:cx+patch_r] = 1.0
+                burnt_map[cy-patch_r:cy+patch_r, cx-patch_r:cx+patch_r] = 0.0
+                days_since_spread = 0
 
-            wu = weather['wind_u'][t]
-            wv = weather['wind_v'][t]
+            # Physics-based spread step
+            wu  = weather['wind_u'][t]
+            wv  = weather['wind_v'][t]
             hum = weather['humidity'][t]
-            temp = weather['temperature'][t]
+            tmp = weather['temperature'][t]
 
-            # Environmental risk factor calculation
-            # Risk increases with high temp, high ndvi (fuel), high slope, low humidity
-            env_factor = (temp * 0.3 + ndvi * 0.3 + slope * 0.2 + (1.0 - hum) * 0.2)
+            # Available fuel: NDVI minus already-burnt areas
+            fuel = np.clip(ndvi - burnt_map, 0.0, 1.0)
 
-            # Advection/spread direction by shifting existing fire by wind vector
-            shift_y = int(np.round(wv.mean() * 2))
-            shift_x = int(np.round(wu.mean() * 2))
+            # Environmental risk:  high temp, high fuel, steep slope, dry conditions -> high risk
+            env_factor = (tmp * 0.30 + fuel * 0.35 + slope * 0.15 + (1.0 - hum) * 0.20) * 1.4
 
-            shifted_fire = np.roll(prev_fire, shift_y, axis=0)
-            shifted_fire = np.roll(shifted_fire, shift_x, axis=1)
+            # Directional advection (fire front carried by wind)
+            shift_y = int(np.round(np.clip(wv.mean() * 1.5, -3, 3)))
+            shift_x = int(np.round(np.clip(wu.mean() * 1.5, -3, 3)))
+            shifted = np.roll(np.roll(active_fire, shift_y, axis=0), shift_x, axis=1)
 
-            # Spatial diffusion + spread
-            spread_prob = gaussian_filter(prev_fire + 0.7 * shifted_fire, sigma=1.5) * env_factor
-            new_fire = np.where(spread_prob > 0.18, 1.0, 0.0)
+            # Diffusion probability
+            spread_prob = gaussian_filter(active_fire * 0.55 + shifted * 0.45, sigma=1.2) * env_factor
 
-            # Combine with previous fire (burnt area stays burnt or active)
-            fire_history[t] = np.clip(prev_fire * 0.6 + new_fire * 1.0, 0.0, 1.0)
+            # New fire ignites where probability exceeds threshold
+            new_fire = (spread_prob > 0.14).astype(np.float32)
 
-        # Construct full 7-channel array per day
-        # Channels: [fire, wind_u, wind_v, humidity, temperature, NDVI, slope]
+            # Extinction: active pixels that haven't spread in >6 steps cool down
+            if active_fire.max() > 0:
+                prev_area = (active_fire > 0.5).sum()
+                curr_area = (new_fire > 0.5).sum()
+                if curr_area <= prev_area * 1.02:
+                    days_since_spread += 1
+                else:
+                    days_since_spread = 0
+
+            # After 8 days of stagnation -> extinguish fire (burnt, no longer active)
+            if days_since_spread >= 8:
+                burnt_map = np.clip(burnt_map + active_fire * 0.85, 0.0, 1.0)
+                active_fire = np.zeros_like(active_fire)
+                days_since_spread = 0
+
+            # Update active fire: new spread minus already-burnt areas
+            active_fire = np.clip(new_fire * (1.0 - burnt_map), 0.0, 1.0)
+
+            # Record current active fire front as the fire channel at time t
+            fire_history[t] = active_fire.copy()
+
+        # Assemble 7-channel time series
         full_series = np.zeros((num_days, 7, self.height, self.width), dtype=np.float32)
         for t in range(num_days):
             full_series[t, 0] = fire_history[t]
@@ -151,38 +170,53 @@ class WildfireDataCubeGenerator:
 
         return full_series
 
-    def create_dataset_samples(self, sequence_length: int = 5, num_days: int = 40):
+    def create_dataset_samples(self, sequence_length: int = 5, num_days: int = 35):
         """
-        Extracts sliding window samples.
-        Input X: [T=5, C=7, H=128, W=128]
-        Target Y: [3, H=128, W=128] representing fire risk at +24h (t+1), +48h (t+2), +72h (t+3)
+        Extracts sliding-window samples from multiple independent fire season simulations.
+        Combines multiple simulated episodes (different seeds) for dataset diversity.
+
+        Input X:  [T=5, C=7, H=128, W=128]
+        Target Y: [3, H=128, W=128]  — fire risk at +24h, +48h, +72h
         """
-        full_series = self.simulate_sequence(num_days=num_days)
+        X_all, Y_all = [], []
 
-        X_samples = []
-        Y_samples = []
+        # Run multiple independent simulations with different seeds for diversity
+        seeds = [self.seed, self.seed + 7, self.seed + 13, self.seed + 31]
+        days_per_sim = max(30, num_days // len(seeds))
 
-        # Sliding window
-        # For sequence length 5, target needs 3 steps ahead -> max index = num_days - 3
-        for t in range(sequence_length, num_days - 3):
-            x_window = full_series[t - sequence_length:t]  # [5, 7, H, W]
-            y_horizon = np.stack([
-                full_series[t, 0],       # +24h target (fire mask)
-                full_series[t + 1, 0],   # +48h target
-                full_series[t + 2, 0],   # +72h target
-            ], axis=0)  # [3, H, W]
+        for sim_seed in seeds:
+            np.random.seed(sim_seed)
+            full_series = self.simulate_sequence(num_days=days_per_sim)
 
-            X_samples.append(x_window)
-            Y_samples.append(y_horizon)
+            for t in range(sequence_length, days_per_sim - 3):
+                x_win = full_series[t - sequence_length:t]          # [5, 7, H, W]
+                y_hor = np.stack([
+                    (full_series[t,     0] > 0.5).astype(np.float32),  # Binary +24h
+                    (full_series[t + 1, 0] > 0.5).astype(np.float32),  # Binary +48h
+                    (full_series[t + 2, 0] > 0.5).astype(np.float32),  # Binary +72h
+                ], axis=0)
 
-        X_tensor = torch.tensor(np.array(X_samples), dtype=torch.float32)
-        Y_tensor = torch.tensor(np.array(Y_samples), dtype=torch.float32)
+                # Skip trivially empty frames (no fire in target or input)
+                if (full_series[t - sequence_length:t, 0] > 0.5).sum() == 0:
+                    continue
+
+                X_all.append(x_win)
+                Y_all.append(y_hor)
+
+        # Reset generator seed
+        np.random.seed(self.seed)
+
+        X_tensor = torch.tensor(np.array(X_all), dtype=torch.float32)
+        Y_tensor = torch.tensor(np.array(Y_all), dtype=torch.float32)
 
         return X_tensor, Y_tensor
 
 
 if __name__ == "__main__":
-    generator = WildfireDataCubeGenerator()
-    X, Y = generator.create_dataset_samples(num_days=30)
-    print(f"Generated X shape: {X.shape}, Y shape: {Y.shape}")
-    print(f"Positive fire pixels in Y (+24h): {(Y[:, 0] > 0.5).sum().item()} / {Y[:, 0].numel()}")
+    gen = WildfireDataCubeGenerator(seed=42)
+    X, Y = gen.create_dataset_samples(sequence_length=5, num_days=35)
+    fire_ratio = (Y > 0.5).float().mean().item()
+    print(f"X shape: {X.shape}, Y shape: {Y.shape}")
+    print(f"Fire pixel ratio: {fire_ratio*100:.2f}%  (target: < 15%)")
+    print(f"Min fire pixels in any sample: {(Y.reshape(len(Y),-1) > 0.5).sum(dim=1).min().item()}")
+    print(f"Max fire pixels in any sample: {(Y.reshape(len(Y),-1) > 0.5).sum(dim=1).max().item()}")

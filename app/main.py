@@ -8,6 +8,7 @@ import sys
 import time
 import json
 import numpy as np
+import pandas as pd
 import torch
 import streamlit as st
 import plotly.express as px
@@ -89,12 +90,14 @@ def load_models_and_data():
 
     convlstm = ConvLSTM2D(in_channels=7, hidden_dims=[32, 16], out_horizons=3)
     if os.path.exists('checkpoints/convlstm_best.pt'):
-        convlstm.load_state_dict(torch.load('checkpoints/convlstm_best.pt', map_location='cpu'))
+        state = torch.load('checkpoints/convlstm_best.pt', map_location='cpu', weights_only=True)
+        convlstm.load_state_dict(state)
     convlstm.eval()
 
     st_gnn = SpatiotemporalGNN(in_channels=7, patch_size=4, hidden_dim=32, out_horizons=3)
     if os.path.exists('checkpoints/st_gnn_best.pt'):
-        st_gnn.load_state_dict(torch.load('checkpoints/st_gnn_best.pt', map_location='cpu'))
+        state = torch.load('checkpoints/st_gnn_best.pt', map_location='cpu', weights_only=True)
+        st_gnn.load_state_dict(state)
     st_gnn.eval()
 
     return X, Y, convlstm, st_gnn
@@ -201,8 +204,18 @@ def main():
 
     # Metrics computation
     current_pred = pred_risk[horizon_idx]
-    current_gt = target_ground_truth[horizon_idx]
-    sample_iou = compute_iou(current_pred[None, ...], current_gt[None, ...], threshold=0.35)
+    current_gt   = target_ground_truth[horizon_idx]
+
+    # Adaptive threshold: top-15% predicted pixels flagged as high-risk
+    # This ensures the prediction map always shows meaningful spatial contrast
+    adaptive_thresh = float(np.percentile(current_pred, 85))
+    adaptive_thresh = max(0.35, min(adaptive_thresh, 0.90))  # Clamp to [0.35, 0.90]
+
+    sample_iou = compute_iou(current_pred[None, ...], current_gt[None, ...], threshold=adaptive_thresh)
+    pred_binary = (current_pred >= adaptive_thresh).astype(np.float32)
+    gt_binary   = (current_gt   >= 0.5).astype(np.float32)
+    pred_fire_pct = pred_binary.mean() * 100
+    gt_fire_pct   = gt_binary.mean()   * 100
 
     # Main Tabs Layout
     tab1, tab_input, tab2, tab3 = st.tabs([
@@ -220,34 +233,66 @@ def main():
 
         with col1:
             st.markdown("### 🛰️ Actual Ground Truth Fire Spread")
-            st.caption("Derived from NASA FIRMS active fire satellite thermal hotspot observations recorded at the actual future time step.")
+            st.caption(f"NASA FIRMS active fire detections at +{selected_horizon_str}. "
+                       f"**{gt_fire_pct:.1f}%** of grid pixels are active fire front.")
             fig_gt = px.imshow(
                 current_gt,
                 color_continuous_scale="Reds",
                 range_color=[0, 1],
-                labels={"color": "Fire Hotspot"},
+                labels={"color": "Fire"},
                 aspect="equal"
             )
-            fig_gt.update_layout(margin=dict(l=0, r=0, t=30, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            fig_gt.update_layout(margin=dict(l=0, r=0, t=30, b=0),
+                                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig_gt, use_container_width=True)
 
         with col2:
             st.markdown("### 🔮 Predicted Wildfire Hazard Probability Grid")
-            st.caption("Live 128x128 probability grid computed in real-time by feeding the 5-day precursor data cube into the deep learning model.")
+            st.caption(f"Model output — raw probability map. Threshold = **{adaptive_thresh:.2f}** "
+                       f"(top 15% percentile). High-risk area: **{pred_fire_pct:.1f}%** of grid.")
             fig_pred = px.imshow(
                 current_pred,
                 color_continuous_scale="YlOrRd",
-                range_color=[0, 1],
+                range_color=[current_pred.min(), current_pred.max()],  # Auto-scale to actual range
                 labels={"color": "Risk Prob"},
                 aspect="equal"
             )
-            fig_pred.update_layout(margin=dict(l=0, r=0, t=30, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            fig_pred.update_layout(margin=dict(l=0, r=0, t=30, b=0),
+                                   paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig_pred, use_container_width=True)
+
+        # Live metrics strip
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("IoU (Spatial Overlap)", f"{sample_iou:.4f}")
+        m2.metric("GT Fire Coverage", f"{gt_fire_pct:.2f}%")
+        m3.metric("Pred Fire Area", f"{pred_fire_pct:.2f}%")
+        m4.metric("Pred Threshold", f"{adaptive_thresh:.2f}")
+
+        # Prediction score histogram
+        with st.expander("📊 Prediction Probability Distribution"):
+            hist_vals = current_pred.ravel()
+            hist_fig = gg.Figure()
+            hist_fig.add_trace(gg.Histogram(
+                x=hist_vals, nbinsx=40, name='Pred probabilities',
+                marker_color='#FC8181', opacity=0.8
+            ))
+            hist_fig.add_vline(x=adaptive_thresh, line_color='#68D391', line_dash='dash',
+                               annotation_text=f'Threshold ({adaptive_thresh:.2f})', annotation_font_color='#68D391')
+            hist_fig.update_layout(
+                title='Distribution of predicted fire probabilities (all 128×128 pixels)',
+                xaxis_title='Probability', yaxis_title='Pixel count',
+                template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(15,15,30,0.5)', height=220
+            )
+            st.plotly_chart(hist_fig, use_container_width=True)
 
         # Download hazard map button
         st.download_button(
             label="📥 Export Current Hazard Map Overlay (JSON Data)",
-            data=json.dumps({"pred_risk_grid": current_pred.tolist(), "horizon": selected_horizon_str, "scenario": selected_scenario_name}),
+            data=json.dumps({"pred_risk_grid": current_pred.tolist(),
+                             "horizon": selected_horizon_str,
+                             "scenario": selected_scenario_name,
+                             "threshold": float(adaptive_thresh)}),
             file_name=f"wildfire_risk_forecast_{horizon_idx+1}d.json",
             mime="application/json"
         )

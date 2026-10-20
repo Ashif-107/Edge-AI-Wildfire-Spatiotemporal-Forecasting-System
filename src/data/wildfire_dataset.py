@@ -28,9 +28,9 @@ class WildfireDataset(Dataset):
 def get_wildfire_dataloaders(
     batch_size: int = 4,
     seq_len: int = 5,
-    total_days: int = 60,
+    total_days: int = 35,
     seed: int = 42,
-    train_ratio: float = 0.7,
+    train_ratio: float = 0.70,
     val_ratio: float = 0.15
 ):
     """

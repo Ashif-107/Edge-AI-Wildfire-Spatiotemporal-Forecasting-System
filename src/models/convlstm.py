@@ -73,6 +73,7 @@ class ConvLSTM2D(nn.Module):
         self.head = nn.Sequential(
             nn.Conv2d(hidden_dims[1], 16, kernel_size=3, padding=1),
             nn.ReLU(),
+            nn.Dropout2d(p=0.3),
             nn.Conv2d(16, out_horizons, kernel_size=1),
             nn.Sigmoid()
         )
