@@ -334,46 +334,196 @@ def main():
         st.plotly_chart(gauge_fig, use_container_width=True)
 
     with tab3:
-        st.subheader("📊 Model Evaluation & Confusion Matrix Analysis")
-        all_preds = []
-        all_targets = []
+        st.subheader("📊 Model Accuracy, Training Curves & Confusion Matrix Analysis")
+
+        # ── Load training history ──────────────────────────────────────────────
+        training_history = {}
+        history_path = 'checkpoints/training_summary.json'
+        if os.path.exists(history_path):
+            with open(history_path) as f:
+                training_history = json.load(f)
+
+        model_key = 'convlstm' if 'ConvLSTM' in selected_arch else 'st_gnn'
+        hist = training_history.get(model_key, {}).get('history', {})
+        best = training_history.get(model_key, {})
+
+        # ── Top-level accuracy summary cards ──────────────────────────────────
+        if best:
+            st.markdown("#### 🏆 Best Validation Metrics (Saved Checkpoint)")
+            mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+            mc1.metric("IoU (Jaccard)", f"{best.get('best_iou', 0):.4f}")
+            mc2.metric("Pixel Accuracy", f"{best.get('best_accuracy', 0):.4f}")
+            mc3.metric("F1-Score", f"{best.get('best_f1', 0):.4f}")
+            mc4.metric("PR-AUC", f"{best.get('best_pr_auc', 0):.4f}")
+            mc5.metric("Balanced Acc.", f"{max(hist.get('val_balanced_accuracy', [0])):.4f}" if hist else "—")
+
+        st.markdown("---")
+
+        # ── Training Curves ────────────────────────────────────────────────────
+        if hist and hist.get('train_loss'):
+            st.markdown("#### 📈 Training & Validation Curves (Per Epoch)")
+            epochs_range = list(range(1, len(hist['train_loss']) + 1))
+
+            tc1, tc2 = st.columns(2)
+
+            # Loss curve
+            with tc1:
+                loss_fig = gg.Figure()
+                loss_fig.add_trace(gg.Scatter(
+                    x=epochs_range, y=hist['train_loss'],
+                    mode='lines+markers', name='Train Loss',
+                    line=dict(color='#FC8181', width=2), marker=dict(size=6)
+                ))
+                loss_fig.add_trace(gg.Scatter(
+                    x=epochs_range, y=hist['val_loss'],
+                    mode='lines+markers', name='Val Loss',
+                    line=dict(color='#F6AD55', width=2, dash='dash'), marker=dict(size=6)
+                ))
+                loss_fig.update_layout(
+                    title='Loss Convergence (Focal + Dice)',
+                    xaxis_title='Epoch', yaxis_title='Loss',
+                    template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(15,15,30,0.5)', height=300, legend=dict(x=0.6, y=0.95)
+                )
+                st.plotly_chart(loss_fig, use_container_width=True)
+
+            # IoU + Accuracy curve
+            with tc2:
+                acc_fig = gg.Figure()
+                acc_fig.add_trace(gg.Scatter(
+                    x=epochs_range, y=hist.get('val_iou', []),
+                    mode='lines+markers', name='Val IoU',
+                    line=dict(color='#68D391', width=2), marker=dict(size=6)
+                ))
+                acc_fig.add_trace(gg.Scatter(
+                    x=epochs_range, y=hist.get('val_accuracy', []),
+                    mode='lines+markers', name='Val Pixel Accuracy',
+                    line=dict(color='#4FD1C5', width=2, dash='dot'), marker=dict(size=6)
+                ))
+                acc_fig.add_trace(gg.Scatter(
+                    x=epochs_range, y=hist.get('val_f1', []),
+                    mode='lines+markers', name='Val F1-Score',
+                    line=dict(color='#B794F4', width=2, dash='dash'), marker=dict(size=6)
+                ))
+                acc_fig.update_layout(
+                    title='Accuracy, IoU & F1 per Epoch',
+                    xaxis_title='Epoch', yaxis_title='Score',
+                    template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(15,15,30,0.5)', height=300,
+                    yaxis=dict(range=[0, 1.05]), legend=dict(x=0.01, y=0.95)
+                )
+                st.plotly_chart(acc_fig, use_container_width=True)
+
+            # Precision vs Recall curve
+            tc3, tc4 = st.columns(2)
+            with tc3:
+                pr_fig = gg.Figure()
+                pr_fig.add_trace(gg.Scatter(
+                    x=epochs_range, y=hist.get('val_precision', []),
+                    mode='lines+markers', name='Precision',
+                    line=dict(color='#FEB2B2', width=2), marker=dict(size=6)
+                ))
+                pr_fig.add_trace(gg.Scatter(
+                    x=epochs_range, y=hist.get('val_recall', []),
+                    mode='lines+markers', name='Recall',
+                    line=dict(color='#90CDF4', width=2, dash='dash'), marker=dict(size=6)
+                ))
+                pr_fig.update_layout(
+                    title='Precision & Recall per Epoch',
+                    xaxis_title='Epoch', yaxis_title='Score',
+                    template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(15,15,30,0.5)', height=280,
+                    yaxis=dict(range=[0, 1.05]), legend=dict(x=0.01, y=0.3)
+                )
+                st.plotly_chart(pr_fig, use_container_width=True)
+
+            with tc4:
+                pr_auc_fig = gg.Figure()
+                pr_auc_fig.add_trace(gg.Scatter(
+                    x=epochs_range, y=hist.get('val_pr_auc', []),
+                    mode='lines+markers', name='PR-AUC',
+                    line=dict(color='#FAF089', width=2), marker=dict(size=6),
+                    fill='tozeroy', fillcolor='rgba(250,240,137,0.1)'
+                ))
+                pr_auc_fig.update_layout(
+                    title='Precision-Recall AUC per Epoch',
+                    xaxis_title='Epoch', yaxis_title='PR-AUC',
+                    template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(15,15,30,0.5)', height=280,
+                    yaxis=dict(range=[0, 1.05])
+                )
+                st.plotly_chart(pr_auc_fig, use_container_width=True)
+
+        else:
+            st.info("Training history not yet available. Run `train.py` to generate epoch-level accuracy logs.")
+
+        st.markdown("---")
+
+        # ── Per-horizon metrics table + confusion matrices ─────────────────────
+        st.markdown("#### 🎯 Per-Forecast Horizon Metrics & Confusion Matrices")
+        all_preds, all_targets = [], []
         with torch.no_grad():
-            for i in range(min(15, len(X))):
-                if "ConvLSTM" in selected_arch:
-                    out = convlstm_model(X[i:i+1]).numpy()[0]
-                else:
-                    out = st_gnn_model(X[i:i+1]).numpy()[0]
+            for i in range(min(20, len(X))):
+                out = (convlstm_model if 'ConvLSTM' in selected_arch else st_gnn_model)(X[i:i+1]).numpy()[0]
                 all_preds.append(out)
                 all_targets.append(Y[i].numpy())
 
-        all_preds = np.array(all_preds)
+        all_preds   = np.array(all_preds)
         all_targets = np.array(all_targets)
-
         horizon_metrics = compute_horizon_metrics(all_preds, all_targets)
 
+        # Metrics summary table
+        table_rows = []
+        for h_key in ["24h", "48h", "72h"]:
+            hm = horizon_metrics[h_key]
+            table_rows.append({
+                "Horizon": h_key,
+                "Accuracy": hm['Accuracy'],
+                "Balanced Accuracy": hm['Balanced_Accuracy'],
+                "IoU": hm['IoU'],
+                "F1-Score": hm['F1_Score'],
+                "Precision": hm['Precision'],
+                "Recall": hm['Recall'],
+                "Specificity": hm['Specificity'],
+                "PR-AUC": hm['PR_AUC'],
+            })
+
+        import pandas as pd
+        df_metrics = pd.DataFrame(table_rows).set_index("Horizon")
+        st.dataframe(
+            df_metrics.style
+                .highlight_max(axis=0, color='rgba(72,187,120,0.3)')
+                .format("{:.4f}"),
+            use_container_width=True
+        )
+
+        st.markdown("#### Confusion Matrices per Forecast Horizon")
         m_col1, m_col2, m_col3 = st.columns(3)
         for idx, h_key in enumerate(["24h", "48h", "72h"]):
             col_target = [m_col1, m_col2, m_col3][idx]
             hm = horizon_metrics[h_key]
+            cm = hm['ConfusionMatrix']
+            cm_matrix = np.array([[cm['TN'], cm['FP']], [cm['FN'], cm['TP']]])
             with col_target:
-                st.markdown(f"#### Horizon: {h_key} Forecast")
-                st.metric("Intersection over Union (IoU)", f"{hm['IoU']}")
-                st.metric("PR-AUC Score", f"{hm['PR_AUC']}")
-                st.metric("F1-Score", f"{hm['F1_Score']}")
-
-                cm = hm['ConfusionMatrix']
-                cm_matrix = np.array([[cm['TN'], cm['FP']], [cm['FN'], cm['TP']]])
+                st.markdown(f"**{h_key} Forecast**")
                 fig_cm = px.imshow(
-                    cm_matrix,
-                    text_auto=True,
+                    cm_matrix, text_auto=True,
                     x=['No Fire (Pred)', 'Fire (Pred)'],
                     y=['No Fire (Actual)', 'Fire (Actual)'],
                     color_continuous_scale="Blues",
-                    title=f"Confusion Matrix ({h_key})"
+                    title=f"Horizon {h_key}"
                 )
-                fig_cm.update_layout(height=280, margin=dict(l=0, r=0, t=35, b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                fig_cm.update_layout(
+                    height=280, margin=dict(l=0, r=0, t=35, b=0),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
+                )
                 st.plotly_chart(fig_cm, use_container_width=True)
+                st.caption(
+                    f"Accuracy: {hm['Accuracy']} | F1: {hm['F1_Score']} | "
+                    f"Precision: {hm['Precision']} | Recall: {hm['Recall']}"
+                )
 
 
 if __name__ == "__main__":
     main()
+
